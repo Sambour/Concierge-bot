@@ -6,4 +6,4 @@ bird(sam).
 bird(tweety).
 ostrich(sam).
 
-?- flies(sam).
+?- flies(tweety).

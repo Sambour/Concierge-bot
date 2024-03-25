@@ -1,2 +1,2 @@
-result(10).
-result(20).
+current(93).
+result(98).

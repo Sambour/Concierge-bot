@@ -1,6 +1,6 @@
 import subprocess
 import utils
-import re
+from preference import get_prefer
 
 class reasoner():
     def __init__(self, paths):
@@ -8,12 +8,23 @@ class reasoner():
         self.memory_path = paths[1]
         self.knowledge_path = paths[2]
         self.function_path = paths[3]
-        self.result_path = paths[4]
-        self.command_path = paths[5]
+        self.update_path = paths[4]
+        self.preference_path = paths[5]
+        self.extra_preference_path = paths[6]
+        self.result_path = paths[7]
+        self.review_path = paths[8]
+        self.command_path = paths[9]
 
         with open(self.memory_path, 'w') as f:
-            f.write('state([]).\n')
+            f.write('')
+        
+        with open(self.result_path, 'w') as f:
+            f.write('')
+
+        with open(self.review_path, 'w') as f:
+            f.write('')
     
+
     def call(self, options: list, num_result):
         
         parameters = ['scasp']
@@ -48,116 +59,180 @@ class reasoner():
         else:
             output = None
 
-        return output
+        return output 
+    
     
     def reason(self, input):
         '''
         input style: aAA(aaa), bBB(bbb), cCC(ccc)
         output style: a dict of mode and output. None for error cases.
         '''
-
-        # if querying for the next choice, just go next
-        if input == 'another_option':
-            with open(self.command_path, 'w') as f:
-                f.write('?- load(Mode, Output).\n')
-            output = self.call([self.knowledge_path, self.memory_path, self.function_path, self.result_path, self.command_path], '-n1')
-            if output:
-                with open(self.result_path, 'r') as f:
-                    options = f.readlines()
-                with open(self.result_path, 'w') as f:
-                    f.writelines(options[1:])
         
-        else:
-            # write the input to the file.
-            with open(self.instant_path, 'w') as f:
-                f.write('info_list([' + input + ']).\n')
-            with open(self.result_path, 'w') as f:
-                f.write('')
-            # update state memory
-            with open(self.command_path, 'w') as f:
-                f.write('?- info_list(L1), state(L2), write_state(L1, L2, State).\n')
-            output = self.call([self.instant_path, self.memory_path, self.function_path, self.command_path], '-n1')
+        # write the input to the file.
+        with open(self.instant_path, 'w') as f:
+            f.write(utils.new_query(input) + '\n')
+        # update state memory
+        state = ''
+        prefer = ''
+        change = ''
+        # update query
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_query(X).\n')
+        output = self.call([self.instant_path, self.memory_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('query', output)
+        # update preference
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_prefer(X).\n')
+        output = self.call([self.instant_path, self.memory_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('prefer', output)
+        prefer = [list(item.values())[0] for item in output]
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_not_prefer(X).\n')
+        output = self.call([self.instant_path, self.memory_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('not_prefer', output)
+        prefer.extend([list(item.values())[0] for item in output])
 
-            if output:
-                m_cur_state = ''
-                cur_state = output['State']
-                cur_state = cur_state.split('),')
-                for pred in cur_state:
-                    pred_part = pred.split(',[')
-                    value_part = pred_part[1]
-                    pred_part = pred_part[0].split('(')
-                    m_cur_state += pred_part[0] + '(' + utils.add_quote(pred_part[1].strip()) + ',[' \
-                        + ','.join([utils.add_quote(value.strip().strip(']')) for value in value_part.split(',')]) + ']),'
-                cur_state = m_cur_state[:-6] + '\'])]'
+        #update preference rules
+        prefer = list(set(prefer))
+        add_prefer_rule = get_prefer(self.preference_path, prefer)
+        with open(self.extra_preference_path, 'w') as f:
+            f.write(add_prefer_rule)
+        
+        # update requirements
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_require(Attr, Value).\n')
+        output = self.call([self.instant_path, self.memory_path, self.preference_path, self.extra_preference_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('require', output)
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_not_require(Attr, Value).\n')
+        output = self.call([self.instant_path, self.memory_path, self.preference_path, self.extra_preference_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('not_require', output)
+        # update another_option and view_history
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_another_option(X).\n')
+        output = self.call([self.instant_path, self.memory_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('another_option', output)
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_answer_current(X).\n')
+        output = self.call([self.instant_path, self.memory_path, self.update_path, self.command_path], '-n0')
+        state += utils.concat_preds('answer_current', output)
+
+        # change mind check
+        with open(self.command_path, 'w') as f:
+            f.write('?- change_req(Attr, Value).\n')
+        output = self.call([self.instant_path, self.memory_path, self.preference_path, self.extra_preference_path, self.update_path, self.command_path], '-n0')
+        change = utils.concat_preds('ask_still_want', output)
+        with open(self.command_path, 'w') as f:
+            f.write('?- change_prefer(X).\n')
+        output = self.call([self.instant_path, self.memory_path, self.preference_path, self.extra_preference_path, self.update_path, self.command_path], '-n0')
+        change += utils.concat_preds('ask_still_prefer', output)
+
+        if state:
+            cur_state = state
+        else:
+            return None
+        
+        with open(self.memory_path, 'w') as f:
+            f.write(cur_state + '\n')
+
+        # view the history recommendation
+        with open(self.command_path, 'w') as f:
+            f.write('?- view_history(X).\n')
+        history = self.call([self.instant_path, self.command_path], '-n1')
+        if history:
+            with open(self.command_path, 'w') as f:
+                f.write('?- view(' + history['X'] + ', I, State).\n')
+            current_view = self.call([self.function_path, self.review_path, self.command_path], '-n1')
+            if current_view:
+                with open(self.command_path, 'w') as f:
+                    f.write('?- history(I, State).\n')
+                histories = self.call([self.review_path, self.command_path], '-n0')
+                histories = utils.concat_preds('history', histories)
+                histories += '\ncurrent(' + current_view['I'] + ').\n'
+                with open(self.review_path, 'w') as f:
+                    f.write(histories)
+                return {'Mode':'recommend', 'Output':current_view['State']}
             else:
                 return None
-            
-            with open(self.memory_path, 'w') as f:
-                f.write('state(' + cur_state + ').\n')
-            
-            # do the recommendation
-            with open(self.command_path, 'w') as f:
-                f.write('?- next_action(Mode, Output).\n')
-            output = self.call([self.memory_path, self.knowledge_path, self.function_path, self.command_path], '-n0')
+        
+        # ask if change mind
+        if change:
+            output = {'Mode':'change', 'Output':change}
+            return output
+        
+        # do the recommendation
+        with open(self.command_path, 'w') as f:
+            f.write('?- next_action(Mode, Output).\n')
+        results = self.call([self.memory_path, self.knowledge_path, self.function_path, self.result_path, self.command_path], '-n0')
 
-            # save the other results to result path.
-            if output:
-                result_list = output
-                output = result_list[0]
-                if output['Mode'] == 'recommend':
-                    if len(result_list) > 1:
-                        result_list = [result for result in result_list if result['Output'] != '[]']
-                        numbers = [re.findall(r'\d+', result['Output'])[0] for result in result_list]
-                        selected = numbers[0]
-                        numbers = list(set(numbers))
-                        numbers.remove(selected)
-                        if numbers:
-                            for number in numbers:
-                                with open(self.result_path, 'a') as f:
-                                    f.write('result(' + number + ').\n')
+        # save the results to result path.
+        if results:
+            output = results[0]
+            if output['Mode'] == 'recommend':
+                numbers = [result['Output'] for result in results]
+                res = []
+                [res.append(x) for x in numbers if x not in res]
+                numbers = res
+                selected = numbers[0]
+                numbers.remove(selected)
+                numbers_str = ''
+                numbers_str += 'current(' + selected + ').\n'
+                for number in numbers:
+                    numbers_str += 'result(' + number + ').\n'
+                with open(self.result_path, 'w') as f:
+                    f.write(numbers_str)
 
         # check and explain
         
         if output and ('Output' not in output or not output['Output']):
             return None
         if output and output['Mode'] == 'recommend':
-            # The following steps are basically adding quote mark to the predicate values so that they can be accepted by scasp.
-            recommend_output = output['Output'].strip('[]')
-            recommend_output = utils.split_predicate(recommend_output)
-            recommend_output = [utils.split_attr_value(pred) for pred in recommend_output]
-            recommend_output_attr = [pred[0] for pred in recommend_output]
-            recommend_output_values = [pred[1].split(',') for pred in recommend_output]
-            recommend_output_values = [[values[0].strip(), utils.add_quote(values[1].strip()), utils.add_quote(','.join(values[2:]).strip())] for values in recommend_output_values]
-            recommend_output = ''
-            for idx in range(len(recommend_output_attr)):
-                recommend_output += recommend_output_attr[idx] + '(' + ','.join(recommend_output_values[idx]) + '), '
-            recommend_output = recommend_output.strip(', ')
-            recommend_output = '[' + recommend_output + ']'
+            # Looking up the queried information of the result place.
+            with open(self.command_path, 'w') as f:
+                f.write('?- look_up(' + output['Output'] + ', Attr, Value).\n')
+            recommend_output = self.call([self.memory_path, self.knowledge_path, self.function_path, self.command_path], '-n0')
+            recommend_output = utils.concat_preds('recommend', recommend_output)
 
             # Querying for explanation
             with open(self.command_path, 'w') as f:
-                f.write('?- explain(' + recommend_output + ', Output).\n')
-            explain = self.call([self.memory_path, self.knowledge_path, self.function_path, self.command_path], '-n1')
+                f.write('?- explain(' + output['Output'] + ', Attr, Value).\n')
+            explain = self.call([self.memory_path, self.knowledge_path, self.extra_preference_path, self.preference_path, self.function_path, self.command_path], '-n0')
+            explain = utils.concat_preds('satisfy_require', explain)
             
-            output = '[' + output['Output'][1:-1] + ', ' + explain['Output'][1:-1] + ']'
+            output = recommend_output + explain
             output = {'Mode':'recommend', 'Output':output}
+
+            # Update the review file.
+            with open(self.command_path, 'w') as f:
+                f.write('?- history(I, State).\n')
+            history = self.call([self.review_path, self.command_path], '-n0')
+            if history:
+                history_str = utils.concat_preds('history', history)
+                current = len(history) + 1
+                history_str += ' history(' + str(current) + ', [' + output['Output'].replace('.', ',').strip(', ') + ']).\n'
+                history_str += 'current(' + str(current + 1) + ').\n'
+            else:
+                history_str = 'history(' + str(1) + ', [' + output['Output'].replace('.', ',').strip(', ') + ']).\n'
+                history_str += 'current(' + str(2) + ').\n'
+            with open(self.review_path, 'w') as f:
+                f.write(history_str)
 
             with open(self.command_path, 'w') as f:
                 f.write('')
+        
+        if output == {}:
+            # Querying for explanation
+            with open(self.command_path, 'w') as f:
+                f.write('?- explain_fail(Success, Fail).\n')
+            explain = self.call([self.memory_path, self.knowledge_path, self.function_path, self.command_path], '-n1')
+            output = {'Success':explain['Success'][1:-1], 'Fail':explain['Fail']}
 
         return output
 
 
 if __name__ == "__main__":
-    names = ['data/info_list.pl', 'data/state.pl', 'data/knowledge.pl', 'src/functions.pl', 'src/query.pl']
+    names = ['data/info_list.pl', 'data/state.pl', 'data/knowledge.pl', 'src/functions.pl', 'src/update.pl', 'src/preference.pl', 'src/extra_preference.pl', 'src/results.pl', 'data/log.pl', 'src/query.pl']
     r = reasoner(names)
-    output = r.call(['data/info_list.pl', 'data/state.pl', 'src/functions.pl', 'src/query.pl'], '-n0')
     
-    m_cur_state = ''
-    cur_state = output['State']
-    cur_state = cur_state.split('),')
-    for pred in cur_state:
-        pred_part = pred.split(',')
-        m_cur_state += pred_part[0] + ',\'' + pred_part[1] + '\'),'
-    cur_state = m_cur_state[:-2]
-    print(cur_state)
+    prefer = ['kebob']
+    print(get_prefer(r.preference_path, prefer))
