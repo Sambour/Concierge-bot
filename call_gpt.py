@@ -323,8 +323,8 @@ def same_name(prompt, name_list):
 
 
 if __name__ == "__main__":
-    prompt = 'require(\'food type\',\'Japanese\'). prefer(\'sushi\').'
-    print(change_mind_confirm(prompt))
+    #prompt = 'require(\'food type\',\'Japanese\'). prefer(\'sushi\').'
+    print(chat('''Hi'''))
     #result = predicate_gen(prompt)
     #prompt = 'require(name,Mellina). require(establishment, restaurant). require(food type, French). require(family-friendly, yes).'
     #result = sentence_gen(prompt)
